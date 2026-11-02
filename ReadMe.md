@@ -9,6 +9,13 @@ Unlike [DisableTurboBoost.kext](https://github.com/nanoant/DisableTurboBoost.kex
 
 You may have also noticed other slowdowns by background processes like `syspolicyd`, `trustd`, `taskgated`, `XProtectService`, `tccd`, `MRT`, `WindowServer`, `VTDecoderXPCService` but this kext is not going to solve them.
 
+
+> [!NOTE]
+> **Sleep/wake support:** In addition to handling `BD PROCHOT` at **boot**, this kext now re-applies the fix after the system **wakes from sleep**.
+>
+> This addresses systems where `BD PROCHOT` is triggered again after resume, causing thermal throttling to return.
+
+
 Prerequisites
 ---------------
 
