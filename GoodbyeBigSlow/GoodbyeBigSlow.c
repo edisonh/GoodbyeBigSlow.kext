@@ -3,6 +3,9 @@
 #include <i386/proc_reg.h>
 #include <i386/cpuid.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/IONotifier.h>
+#include <IOKit/IOService.h>
 
 // IDEA: kick X86PlatformShim.kext off the candidate list (failed)
 // IDEA: patch __ZN15X86PlatformShim18sendHardPLimitXCPMEi (Lilu.kext)
@@ -221,6 +224,66 @@ static void DBLogStatus(const char *s, int n)
 }
 
 //////////////////////////////////////////////////////////////////////////////
+///// Sleep/Wake Notifier
+
+// Keep the notifier so it can be removed in stop().
+static IONotifier *gWakeNotifier = NULL;
+
+/*
+ * De-assert PROCHOT on wake.
+ */
+static void wakeAction(void)
+{
+    int ret = -1;
+    DBLog("Wake action entered.");
+
+    // cpucount, asserted, deasserted
+    SInt64 counts[3] __attribute__((aligned(sizeof(SInt64)))) = {0, 0, 0};
+
+    DBLogStatus("De-asserting Processor Hot", -1);
+    ret = deassert_prochot(counts);
+    DBLog("CPU count = %lld", counts[0]);
+    DBLog("PROCHOT asserted = %lld", counts[1]);
+    DBLog("PROCHOT de-asserted = %lld", counts[2]);
+    DBLogStatus("De-asserting Processor Hot", ret);
+
+    DBLog("Wake action completed.");
+}
+
+/*
+ * Sleep/wake interest callback.
+ */
+static IOReturn sleepWakeHandler(
+    void *target,
+    void *refCon,
+    UInt32 messageType,
+    IOService *provider,
+    void *messageArgument,
+    vm_size_t argSize
+) {
+    switch (messageType) {
+        case kIOMessageSystemWillSleep: {
+            // Sleep must be acknowledged; otherwise the system waits about 30 seconds and then forces sleep.
+            DBLog("WillSleep ack entered.");
+            IOReturn kr = acknowledgeSleepWakeNotification(messageArgument);
+            DBLog("WillSleep ack returned 0x%x", kr);
+            break;
+        }
+
+        case kIOMessageSystemHasPoweredOn:
+            wakeAction();
+            break;
+
+        default:
+            break;
+    }
+
+    return kIOReturnSuccess;
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////
 ///// Entry Points
 
 static kern_return_t kext_start(__unused kmod_info_t *_o, __unused void *data)
@@ -229,6 +292,18 @@ static kern_return_t kext_start(__unused kmod_info_t *_o, __unused void *data)
         DBLog("Targeted Intel CPU unavailable!");
         return KERN_FAILURE;
     }
+
+    gWakeNotifier = registerPrioritySleepWakeInterest(
+        &sleepWakeHandler,
+        NULL,
+        NULL
+    );
+    if (!gWakeNotifier) {
+        DBLog("Failed to register sleep/wake interest.");
+    } else {
+        DBLog("Registered sleep/wake interest.");
+    }
+
     int ret = -1;
 
     // GoodbyeBigSlow=<flags>  // "-": disable; "+": enable
@@ -280,6 +355,12 @@ static kern_return_t kext_start(__unused kmod_info_t *_o, __unused void *data)
 
 static kern_return_t kext_stop(__unused kmod_info_t *_o, __unused void *data)
 {
+    if (gWakeNotifier) {
+        gWakeNotifier->remove();
+        gWakeNotifier = NULL;
+        DBLog("Wake notifier removed.");
+    }
+    
     DBLog("Stopping ...");
     return KERN_SUCCESS;
 }
